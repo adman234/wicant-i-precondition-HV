@@ -1072,7 +1072,7 @@ static void precondition_global_rx(sm_t *sm, const twai_message_t *to_push, can_
             && to_push->data_length_code >= BATTERY_SOC_DATA_LENGTH) {
         precondition_soc_t soc = {
             .raw = to_push->data[BATTERY_SOC_INDEX],
-            .updated_at_us = esp_timer_get_time(),
+            .updated_at_us = sm_now(sm),
         };
 
         xQueueOverwrite(battery_soc_queue, &soc);

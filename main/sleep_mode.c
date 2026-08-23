@@ -78,6 +78,7 @@ static bool calibrated = false;
 static EventGroupHandle_t s_mqtt_event_group = NULL;
 static float sleep_voltage = 13.1f;
 static uint8_t sleep_can_protect = 0;
+static uint8_t sleep_charge_protect = 0;
 
 // 0x038 arrives many times a second while the car is awake, so anything older
 // than this means the bus went quiet rather than the car still being in READY.
@@ -352,6 +353,31 @@ static bool car_blocks_sleep(void)
 	return power.ready;
 }
 
+// Same contract as car_blocks_sleep(): only ever blocks on fresh, positive
+// charging power, so a quiet bus or an unsupported platform cannot pin the
+// device awake. Charging power is whole kW, so a very slow AC charge could
+// report 0 and fall through to voltage alone.
+static bool charging_blocks_sleep(void)
+{
+	if (!sleep_charge_protect)
+	{
+		return false;
+	}
+
+	precondition_charge_t charge;
+	if (!precondition_get_charge_power(&charge))
+	{
+		return false;
+	}
+
+	if ((esp_timer_get_time() - charge.updated_at_us) > CAR_POWER_FRESH_US)
+	{
+		return false;
+	}
+
+	return charge.power_kw > 0U;
+}
+
 static void adc_task(void *pvParameters)
 {
     esp_err_t ret;
@@ -400,7 +426,7 @@ static void adc_task(void *pvParameters)
 			{
 				case RUN_STATE:
 				{
-					if(battery_voltage < sleep_voltage && !car_blocks_sleep())
+					if(battery_voltage < sleep_voltage && !car_blocks_sleep() && !charging_blocks_sleep())
 					{
 						ESP_LOGI(TAG, "low voltage: %f", battery_voltage);
 						sleep_detect_time = esp_timer_get_time();
@@ -418,6 +444,11 @@ static void adc_task(void *pvParameters)
 					else if(car_blocks_sleep())
 					{
 						ESP_LOGI(TAG, "car in READY, cancelling sleep countdown");
+						sleep_state = RUN_STATE;
+					}
+					else if(charging_blocks_sleep())
+					{
+						ESP_LOGI(TAG, "car charging, cancelling sleep countdown");
 						sleep_state = RUN_STATE;
 					}
 
@@ -542,10 +573,12 @@ int8_t sleep_mode_get_voltage(float *val)
 	return -1;
 }
 
-int8_t sleep_mode_init(uint8_t enable, float sleep_volt, uint8_t can_protect)
+int8_t sleep_mode_init(uint8_t enable, float sleep_volt, uint8_t can_protect, uint8_t charge_protect)
 {
 	sleep_can_protect = can_protect;
-	ESP_LOGW(TAG, "sleep_can_protect: %u", (unsigned)can_protect);
+	sleep_charge_protect = charge_protect;
+	ESP_LOGW(TAG, "sleep_can_protect: %u sleep_charge_protect: %u",
+			(unsigned)can_protect, (unsigned)charge_protect);
 	enable_sleep = enable;
 	sleep_voltage = sleep_volt;
 	ESP_LOGW(TAG, "sleep_volt: %2.2f", sleep_volt);

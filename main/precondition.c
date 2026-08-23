@@ -194,6 +194,13 @@ static bool activation_is_release(const message_payload_t *msg, const twai_messa
 
 #define IS_BATTERY_SOC_FRAME(frame_id) ((frame_id) == BATTERY_SOC_FRAME_ID)
 
+// Charging power in whole kW, byte 6 of 0x30E.
+#define CHARGE_POWER_FRAME_ID 0x30EU
+#define CHARGE_POWER_INDEX 6U
+#define CHARGE_POWER_DATA_LENGTH 7U
+
+#define IS_CHARGE_POWER_FRAME(frame_id) ((frame_id) == CHARGE_POWER_FRAME_ID)
+
 #define CAR_BUS CAN_BUS_0
 #define HEAD_UNIT_BUS CAN_BUS_1
 
@@ -314,6 +321,7 @@ static struct {
 static QueueHandle_t battery_temperature_queue = NULL;
 static QueueHandle_t battery_soc_queue = NULL;
 static QueueHandle_t car_power_queue = NULL;
+static QueueHandle_t charge_power_queue = NULL;
 
 // ********************* config caches *********************
 
@@ -1090,6 +1098,17 @@ static void precondition_global_rx(sm_t *sm, const twai_message_t *to_push, can_
         xQueueOverwrite(battery_soc_queue, &soc);
     }
 
+    if (IS_CHARGE_POWER_FRAME(to_push->identifier)
+            && rx_bus == CAR_BUS
+            && to_push->data_length_code >= CHARGE_POWER_DATA_LENGTH) {
+        precondition_charge_t charge = {
+            .power_kw = to_push->data[CHARGE_POWER_INDEX],
+            .updated_at_us = sm_now(sm),
+        };
+
+        xQueueOverwrite(charge_power_queue, &charge);
+    }
+
     int8_t precon_button_type = cached_precon_button_type();
     if (precon_button_type == BUTTON_DISABLED) {
         // activation button disabled in config; don't listen for any button press
@@ -1133,6 +1152,8 @@ void precondition_init(void) {
     configASSERT(battery_soc_queue != NULL);
     car_power_queue = xQueueCreate(1, sizeof(precondition_power_t));
     configASSERT(car_power_queue != NULL);
+    charge_power_queue = xQueueCreate(1, sizeof(precondition_charge_t));
+    configASSERT(charge_power_queue != NULL);
     sm_init(&precon_sm, "precondition", &S_IDLE, &precondition_global_hooks);
 }
 
@@ -1176,4 +1197,12 @@ bool precondition_get_car_power(precondition_power_t *out) {
     }
 
     return xQueuePeek(car_power_queue, out, 0) == pdTRUE;
+}
+
+bool precondition_get_charge_power(precondition_charge_t *out) {
+    if (out == NULL || charge_power_queue == NULL) {
+        return false;
+    }
+
+    return xQueuePeek(charge_power_queue, out, 0) == pdTRUE;
 }

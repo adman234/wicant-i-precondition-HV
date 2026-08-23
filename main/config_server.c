@@ -133,6 +133,7 @@ const char device_config_default[] = R"json({
 "ble_status":"disable",
 "sleep_status":"disable",
 "sleep_can_protect":"disable",
+"sleep_charge_protect":"disable",
 "sleep_volt":"13.1",
 "wakeup_volt":"13.5",
 "batt_alert":"disable",
@@ -964,6 +965,7 @@ char *config_server_get_status_json(bool remove_sensitive_info)
 
 	cJSON_AddStringToObject(root, "sleep_status", device_config.sleep_status);
 	cJSON_AddStringToObject(root, "sleep_can_protect", device_config.sleep_can_protect);
+	cJSON_AddStringToObject(root, "sleep_charge_protect", device_config.sleep_charge_protect);
 	cJSON_AddStringToObject(root, "sleep_volt", device_config.sleep_volt);
 	cJSON_AddStringToObject(root, "sleep_time", device_config.sleep_time);
 	cJSON_AddStringToObject(root, "wakeup_volt", device_config.wakeup_volt);
@@ -1029,6 +1031,21 @@ char *config_server_get_status_json(bool remove_sensitive_info)
 	} else {
         cJSON_AddBoolToObject(root, "car_power_valid", false);
         cJSON_AddStringToObject(root, "car_power_state", "unknown");
+	}
+
+	precondition_charge_t charge;
+
+	if (precondition_get_charge_power(&charge)) {
+        cJSON_AddBoolToObject(root, "charge_power_valid", true);
+        cJSON_AddNumberToObject(root, "charge_power_kw", charge.power_kw);
+        cJSON_AddBoolToObject(root, "charging", charge.power_kw > 0U);
+        cJSON_AddNumberToObject(
+            root,
+            "charge_power_age_ms",
+            (esp_timer_get_time() - charge.updated_at_us) / 1000
+        );
+	} else {
+        cJSON_AddBoolToObject(root, "charge_power_valid", false);
 	}
 
 	{
@@ -1863,6 +1880,21 @@ static void config_server_load_cfg(char *cfg)
 	}
 	ESP_LOGI(TAG, "device_config.sleep_can_protect: %s", device_config.sleep_can_protect);
 
+	strlcpy(device_config.sleep_charge_protect, "disable", sizeof(device_config.sleep_charge_protect));
+	key = cJSON_GetObjectItem(root, "sleep_charge_protect");
+	if (key != NULL)
+	{
+		if (cJSON_IsString(key) && key->valuestring != NULL)
+		{
+			strlcpy(device_config.sleep_charge_protect, key->valuestring, sizeof(device_config.sleep_charge_protect));
+		}
+		else if (cJSON_IsBool(key))
+		{
+			strlcpy(device_config.sleep_charge_protect, cJSON_IsTrue(key) ? "enable" : "disable", sizeof(device_config.sleep_charge_protect));
+		}
+	}
+	ESP_LOGI(TAG, "device_config.sleep_charge_protect: %s", device_config.sleep_charge_protect);
+
 	key = cJSON_GetObjectItem(root,"ble_status");
 	if(key == 0)
 	{
@@ -2652,6 +2684,11 @@ int8_t config_server_get_ble_config(void)
 		return 0;
 	}
 	return -1;
+}
+
+int8_t config_server_get_sleep_charge_protect(void)
+{
+	return (strcmp(device_config.sleep_charge_protect, "enable") == 0) ? 1 : 0;
 }
 
 int8_t config_server_get_sleep_can_protect(void)

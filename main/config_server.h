@@ -112,6 +112,7 @@ typedef struct _device_config
 	char sleep_status[32];
 	char sleep_volt[10];
 	char sleep_can_protect[10];
+	char sleep_charge_protect[10];
 	char wakeup_volt[10];
 	char sleep_time[32];
 	char wakeup_time[32];
@@ -176,6 +177,7 @@ void config_server_restart(void);
 bool config_server_ws_connected(void);
 int8_t config_server_get_sleep_volt(float *sleep_volt);
 int8_t config_server_get_sleep_can_protect(void);
+int8_t config_server_get_sleep_charge_protect(void);
 int8_t config_server_get_battery_alert_config(void);
 int32_t config_server_get_alert_port(void);
 char *config_server_get_alert_ssid(void);

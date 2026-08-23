@@ -683,16 +683,16 @@ void app_main(void)
 
 		if(config_server_get_sleep_volt(&sleep_voltage) != -1)
 		{
-			sleep_mode_init(1, sleep_voltage);
+			sleep_mode_init(1, sleep_voltage, config_server_get_sleep_can_protect());
 		}
 		else
 		{
-			sleep_mode_init(0, 13.1f);
+			sleep_mode_init(0, 13.1f, 0);
 		}
 	}
 	else
 	{
-		sleep_mode_init(0, 13.1f);
+		sleep_mode_init(0, 13.1f, 0);
 	}
 
     gpio_set_level(PWR_LED_GPIO_NUM, PWR_LED_ON);

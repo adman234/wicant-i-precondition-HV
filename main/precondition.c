@@ -313,6 +313,7 @@ static struct {
 
 static QueueHandle_t battery_temperature_queue = NULL;
 static QueueHandle_t battery_soc_queue = NULL;
+static QueueHandle_t car_power_queue = NULL;
 
 // ********************* config caches *********************
 
@@ -1029,6 +1030,17 @@ static void precondition_global_rx(sm_t *sm, const twai_message_t *to_push, can_
             && rx_bus == CAR_BUS
             && to_push->data_length_code >= 1U) {
         bool ready = POWER_STATUS_READY(to_push->data[0]);
+
+        // Publish every frame, not just edges. Sleep mode needs to distinguish
+        // "the car is in READY right now" from "READY was the last thing we saw
+        // before the bus went quiet", and only a timestamp per frame does that.
+        precondition_power_t power = {
+            .ready = ready,
+            .raw = to_push->data[0],
+            .updated_at_us = sm_now(sm),
+        };
+        xQueueOverwrite(car_power_queue, &power);
+
         if (ready != platform.car_in_ready) {
             platform.car_in_ready = ready;
             ESP_LOGI(TAG, "car power: %s", ready ? "ready" : "off");
@@ -1119,6 +1131,8 @@ void precondition_init(void) {
     configASSERT(battery_temperature_queue != NULL);
     battery_soc_queue = xQueueCreate(1, sizeof(precondition_soc_t));
     configASSERT(battery_soc_queue != NULL);
+    car_power_queue = xQueueCreate(1, sizeof(precondition_power_t));
+    configASSERT(car_power_queue != NULL);
     sm_init(&precon_sm, "precondition", &S_IDLE, &precondition_global_hooks);
 }
 
@@ -1154,4 +1168,12 @@ bool precondition_get_battery_soc(precondition_soc_t *out) {
     }
 
     return xQueuePeek(battery_soc_queue, out, 0) == pdTRUE;
+}
+
+bool precondition_get_car_power(precondition_power_t *out) {
+    if (out == NULL || car_power_queue == NULL) {
+        return false;
+    }
+
+    return xQueuePeek(car_power_queue, out, 0) == pdTRUE;
 }

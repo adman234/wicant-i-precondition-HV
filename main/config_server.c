@@ -132,6 +132,7 @@ const char device_config_default[] = R"json({
 "ble_pass":"123456",
 "ble_status":"disable",
 "sleep_status":"disable",
+"sleep_can_protect":"disable",
 "sleep_volt":"13.1",
 "wakeup_volt":"13.5",
 "batt_alert":"disable",
@@ -895,6 +896,16 @@ static esp_err_t check_status_handler(httpd_req_t *req)
 	return ESP_OK;
 }
 
+// /check_status is reachable without credentials, so secrets are replaced with
+// a fixed placeholder rather than sent verbatim. The config UI does not read
+// them from here; it loads the real values from /load_config.
+#define SECRET_PLACEHOLDER "******"
+
+static void add_masked_string(cJSON *root, const char *key, const char *value)
+{
+	cJSON_AddStringToObject(root, key, (value != NULL && value[0] != '\0') ? SECRET_PLACEHOLDER : "");
+}
+
 char *config_server_get_status_json(bool remove_sensitive_info)
 {
 	char ip_str[20] = {0};
@@ -926,7 +937,7 @@ char *config_server_get_status_json(bool remove_sensitive_info)
 	if (!remove_sensitive_info)
 	{
 		cJSON_AddStringToObject(root, "sta_ssid", device_config.sta_ssid);
-		cJSON_AddStringToObject(root, "sta_pass", device_config.sta_pass);
+		add_masked_string(root, "sta_pass", device_config.sta_pass);
 		cJSON_AddStringToObject(root, "sta_security", device_config.sta_security);
 		cJSON_AddStringToObject(root, "sta_ip", ip_str);
 	}
@@ -952,6 +963,7 @@ char *config_server_get_status_json(bool remove_sensitive_info)
 	cJSON_AddStringToObject(root, "protocol", device_config.protocol);
 
 	cJSON_AddStringToObject(root, "sleep_status", device_config.sleep_status);
+	cJSON_AddStringToObject(root, "sleep_can_protect", device_config.sleep_can_protect);
 	cJSON_AddStringToObject(root, "sleep_volt", device_config.sleep_volt);
 	cJSON_AddStringToObject(root, "sleep_time", device_config.sleep_time);
 	cJSON_AddStringToObject(root, "wakeup_volt", device_config.wakeup_volt);
@@ -966,11 +978,11 @@ char *config_server_get_status_json(bool remove_sensitive_info)
 	if (!remove_sensitive_info)
 	{
 		cJSON_AddStringToObject(root, "batt_alert_ssid", device_config.batt_alert_ssid);
-		cJSON_AddStringToObject(root, "batt_alert_pass", device_config.batt_alert_pass);
+		add_masked_string(root, "batt_alert_pass", device_config.batt_alert_pass);
 		cJSON_AddStringToObject(root, "batt_alert_url", device_config.batt_alert_url);
 		cJSON_AddStringToObject(root, "batt_alert_port", device_config.batt_alert_port);
 		cJSON_AddStringToObject(root, "batt_mqtt_user", device_config.batt_mqtt_user);
-		cJSON_AddStringToObject(root, "batt_mqtt_pass", device_config.batt_mqtt_pass);
+		add_masked_string(root, "batt_mqtt_pass", device_config.batt_mqtt_pass);
 	}
 
 	precondition_temperature_t temperature;
@@ -1002,6 +1014,23 @@ char *config_server_get_status_json(bool remove_sensitive_info)
         cJSON_AddBoolToObject(root, "battery_soc_valid", false);
 	}
 
+	precondition_power_t car_power;
+
+	if (precondition_get_car_power(&car_power)) {
+        cJSON_AddBoolToObject(root, "car_power_valid", true);
+        cJSON_AddBoolToObject(root, "car_ready", car_power.ready);
+        cJSON_AddStringToObject(root, "car_power_state", car_power.ready ? "ready" : "off");
+        cJSON_AddNumberToObject(root, "car_power_raw", car_power.raw);
+        cJSON_AddNumberToObject(
+            root,
+            "car_power_age_ms",
+            (esp_timer_get_time() - car_power.updated_at_us) / 1000
+        );
+	} else {
+        cJSON_AddBoolToObject(root, "car_power_valid", false);
+        cJSON_AddStringToObject(root, "car_power_state", "unknown");
+	}
+
 	{
 		char volt[12] = {0};
 		float tmp = 0;
@@ -1027,7 +1056,7 @@ char *config_server_get_status_json(bool remove_sensitive_info)
 		cJSON_AddStringToObject(root, "mqtt_url", device_config.mqtt_url);
 		cJSON_AddStringToObject(root, "mqtt_port", device_config.mqtt_port);
 		cJSON_AddStringToObject(root, "mqtt_user", device_config.mqtt_user);
-		cJSON_AddStringToObject(root, "mqtt_pass", device_config.mqtt_pass);
+		add_masked_string(root, "mqtt_pass", device_config.mqtt_pass);
 	}
 	cJSON_AddStringToObject(root, "mqtt_tx_topic", device_config.mqtt_tx_topic);
 	cJSON_AddStringToObject(root, "mqtt_rx_topic", device_config.mqtt_rx_topic);
@@ -1818,6 +1847,22 @@ static void config_server_load_cfg(char *cfg)
 	strcpy(device_config.sleep_status, key->valuestring);
 	ESP_LOGE(TAG, "device_config.sleep_status: %s", device_config.sleep_status);
 
+	// Optional: absent in configs saved before CAN-protected sleep existed.
+	strlcpy(device_config.sleep_can_protect, "disable", sizeof(device_config.sleep_can_protect));
+	key = cJSON_GetObjectItem(root, "sleep_can_protect");
+	if (key != NULL)
+	{
+		if (cJSON_IsString(key) && key->valuestring != NULL)
+		{
+			strlcpy(device_config.sleep_can_protect, key->valuestring, sizeof(device_config.sleep_can_protect));
+		}
+		else if (cJSON_IsBool(key))
+		{
+			strlcpy(device_config.sleep_can_protect, cJSON_IsTrue(key) ? "enable" : "disable", sizeof(device_config.sleep_can_protect));
+		}
+	}
+	ESP_LOGI(TAG, "device_config.sleep_can_protect: %s", device_config.sleep_can_protect);
+
 	key = cJSON_GetObjectItem(root,"ble_status");
 	if(key == 0)
 	{
@@ -2607,6 +2652,11 @@ int8_t config_server_get_ble_config(void)
 		return 0;
 	}
 	return -1;
+}
+
+int8_t config_server_get_sleep_can_protect(void)
+{
+	return (strcmp(device_config.sleep_can_protect, "enable") == 0) ? 1 : 0;
 }
 
 int8_t config_server_get_sleep_config(void)

@@ -35,6 +35,7 @@
 #include "types.h"
 #include "esp_timer.h"
 #include "config_server.h"
+#include "precondition.h"
 #include "realdash.h"
 #include "slcan.h"
 #include "can.h"
@@ -76,6 +77,11 @@ static adc_channel_t voltage_adc_ch = VBAT_ADC_CHANNEL;
 static bool calibrated = false;
 static EventGroupHandle_t s_mqtt_event_group = NULL;
 static float sleep_voltage = 13.1f;
+static uint8_t sleep_can_protect = 0;
+
+// 0x038 arrives many times a second while the car is awake, so anything older
+// than this means the bus went quiet rather than the car still being in READY.
+#define CAR_POWER_FRESH_US 5000000
 static uint8_t enable_sleep = 0;
 static QueueHandle_t voltage_queue = NULL;
 adc_oneshot_unit_handle_t adc_handle;
@@ -320,6 +326,32 @@ esp_err_t read_ss_adc_voltage(float *voltage_out)
 #define SLEEP_STATE			2
 #define WAKEUP_STATE		3
 
+// CAN-protected sleep: refuse to sleep while the car is demonstrably in READY.
+// Fails open on purpose. If the option is off, if 0x038 has never been seen (an
+// unsupported platform or a bus we are not wired to), or if the last frame is
+// stale, this returns false and voltage alone decides. A stuck "ready" must
+// never be able to keep the device awake indefinitely and flatten the battery.
+static bool car_blocks_sleep(void)
+{
+	if (!sleep_can_protect)
+	{
+		return false;
+	}
+
+	precondition_power_t power;
+	if (!precondition_get_car_power(&power))
+	{
+		return false;
+	}
+
+	if ((esp_timer_get_time() - power.updated_at_us) > CAR_POWER_FRESH_US)
+	{
+		return false;
+	}
+
+	return power.ready;
+}
+
 static void adc_task(void *pvParameters)
 {
     esp_err_t ret;
@@ -368,7 +400,7 @@ static void adc_task(void *pvParameters)
 			{
 				case RUN_STATE:
 				{
-					if(battery_voltage < sleep_voltage)
+					if(battery_voltage < sleep_voltage && !car_blocks_sleep())
 					{
 						ESP_LOGI(TAG, "low voltage: %f", battery_voltage);
 						sleep_detect_time = esp_timer_get_time();
@@ -381,6 +413,11 @@ static void adc_task(void *pvParameters)
 					if(battery_voltage > sleep_voltage)
 					{
 						ESP_LOGI(TAG, "high voltage: %f", battery_voltage);
+						sleep_state = RUN_STATE;
+					}
+					else if(car_blocks_sleep())
+					{
+						ESP_LOGI(TAG, "car in READY, cancelling sleep countdown");
 						sleep_state = RUN_STATE;
 					}
 
@@ -505,8 +542,10 @@ int8_t sleep_mode_get_voltage(float *val)
 	return -1;
 }
 
-int8_t sleep_mode_init(uint8_t enable, float sleep_volt)
+int8_t sleep_mode_init(uint8_t enable, float sleep_volt, uint8_t can_protect)
 {
+	sleep_can_protect = can_protect;
+	ESP_LOGW(TAG, "sleep_can_protect: %u", (unsigned)can_protect);
 	enable_sleep = enable;
 	sleep_voltage = sleep_volt;
 	ESP_LOGW(TAG, "sleep_volt: %2.2f", sleep_volt);

@@ -1103,8 +1103,10 @@ static void precondition_global_rx(sm_t *sm, const twai_message_t *to_push, can_
             && to_push->data_length_code >= CHARGE_POWER_DATA_LENGTH) {
         precondition_charge_t charge = {
             .power_kw = to_push->data[CHARGE_POWER_INDEX],
+            .dlc = to_push->data_length_code,
             .updated_at_us = sm_now(sm),
         };
+        memcpy(charge.data, to_push->data, sizeof(charge.data));
 
         xQueueOverwrite(charge_power_queue, &charge);
     }

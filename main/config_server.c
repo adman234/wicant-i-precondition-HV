@@ -1054,6 +1054,17 @@ char *config_server_get_status_json(bool remove_sensitive_info)
             "charge_power_age_ms",
             (esp_timer_get_time() - charge.updated_at_us) / 1000
         );
+        {
+            // Full payload as hex, so the byte carrying charging power can be
+            // identified from one observation during a real charge.
+            char charge_hex[17];
+            for (uint8_t i = 0; i < 8U; i++)
+            {
+                snprintf(&charge_hex[i * 2], 3, "%02X", charge.data[i]);
+            }
+            charge_hex[16] = 0;
+            cJSON_AddStringToObject(root, "charge_frame_raw", charge_hex);
+        }
 	} else {
         cJSON_AddBoolToObject(root, "charge_power_valid", false);
 	}

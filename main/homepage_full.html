@@ -2631,9 +2631,14 @@ function loadAutoTable(jsonData) {
 				document.getElementById("car_power_status").textContent = "Waiting for CAN data";
 			}
 			if (obj.charge_power_valid) {
-				document.getElementById("charge_power_status").textContent = obj.charging
-					? `Yes, ${obj.charge_power_kw} kW (${formatAge(obj.charge_power_age_ms)} ago)`
-					: `No (${formatAge(obj.charge_power_age_ms)} ago)`;
+				const state = obj.charging
+					? `Yes, ${obj.charge_power_kw} kW`
+					: "No";
+				// Raw payload shown so the byte carrying charging power can be
+				// identified during a real charge; bytes 0, 1, 5 and 6 are all
+				// zero in every recorded non-charging log.
+				document.getElementById("charge_power_status").textContent =
+					`${state} (0x${obj.charge_frame_raw || "?"}; ${formatAge(obj.charge_power_age_ms)} ago)`;
 			} else {
 				document.getElementById("charge_power_status").textContent = "Waiting for CAN data";
 			}

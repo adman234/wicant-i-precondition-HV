@@ -155,6 +155,8 @@ static bool activation_is_release(const message_payload_t *msg, const twai_messa
 #define POWER_STATUS_MASK 0x0FU
 #define POWER_STATUS_READY(power_status_byte) \
     (((power_status_byte) & POWER_STATUS_MASK) == 0x04U)
+#define POWER_STATUS_CHARGING(power_status_byte) \
+    (((power_status_byte) & POWER_STATUS_MASK) == CAR_POWER_CHARGING)
 
 #define PRECONDITION_DEBOUNCE_US 1000000U  // 1 second
 #define PRECONDITION_LONG_PRESS_US 1000000U  // short/long press threshold: 1 second
@@ -1044,6 +1046,7 @@ static void precondition_global_rx(sm_t *sm, const twai_message_t *to_push, can_
         // before the bus went quiet", and only a timestamp per frame does that.
         precondition_power_t power = {
             .ready = ready,
+            .charging = POWER_STATUS_CHARGING(to_push->data[0]),
             .raw = to_push->data[0],
             .updated_at_us = sm_now(sm),
         };

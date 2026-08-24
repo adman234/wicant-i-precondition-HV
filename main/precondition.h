@@ -30,12 +30,18 @@ typedef struct {
 bool precondition_get_battery_soc(precondition_soc_t *out);
 
 // Car power state, from the low nibble of byte 0 of frame 0x038.
-#define CAR_POWER_OFF 0x01U    // awake but not in READY
+#define CAR_POWER_OFF 0x01U      // awake but not in READY
 #define CAR_POWER_READY 0x04U
+// Observed steady while charging with the ignition off. Appears only as a rare
+// transient otherwise: 12 frames out of 10225 across every recorded
+// non-charging log in tylerharvey/Ioniq5_CAN.
+#define CAR_POWER_CHARGING 0x06U
 
 typedef struct {
     // true while the low nibble reads CAR_POWER_READY
     bool ready;
+    // true while the low nibble reads CAR_POWER_CHARGING
+    bool charging;
     // raw byte 0, so callers can see states we do not name yet
     uint8_t raw;
     // updated on every 0x038 frame, not just on edges, so callers can tell a

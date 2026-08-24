@@ -353,10 +353,10 @@ static bool car_blocks_sleep(void)
 	return power.ready;
 }
 
-// Same contract as car_blocks_sleep(): only ever blocks on fresh, positive
-// charging power, so a quiet bus or an unsupported platform cannot pin the
-// device awake. Charging power is whole kW, so a very slow AC charge could
-// report 0 and fall through to voltage alone.
+// Same fail-open contract as car_blocks_sleep(). Charging is read from the
+// 0x038 power state rather than 0x30E, whose candidate bytes all stay zero
+// through a real charge. Note the DC-DC converter holds the 12V rail near
+// 14.5V while charging anyway, so voltage alone usually keeps the device awake.
 static bool charging_blocks_sleep(void)
 {
 	if (!sleep_charge_protect)
@@ -364,18 +364,18 @@ static bool charging_blocks_sleep(void)
 		return false;
 	}
 
-	precondition_charge_t charge;
-	if (!precondition_get_charge_power(&charge))
+	precondition_power_t power;
+	if (!precondition_get_car_power(&power))
 	{
 		return false;
 	}
 
-	if ((esp_timer_get_time() - charge.updated_at_us) > CAR_POWER_FRESH_US)
+	if ((esp_timer_get_time() - power.updated_at_us) > CAR_POWER_FRESH_US)
 	{
 		return false;
 	}
 
-	return charge.power_kw > 0U;
+	return power.charging;
 }
 
 static void adc_task(void *pvParameters)

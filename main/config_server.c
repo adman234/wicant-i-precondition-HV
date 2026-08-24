@@ -1031,7 +1031,12 @@ char *config_server_get_status_json(bool remove_sensitive_info)
 	if (precondition_get_car_power(&car_power)) {
         cJSON_AddBoolToObject(root, "car_power_valid", true);
         cJSON_AddBoolToObject(root, "car_ready", car_power.ready);
-        cJSON_AddStringToObject(root, "car_power_state", car_power.ready ? "ready" : "off");
+        cJSON_AddStringToObject(root, "car_power_state",
+                car_power.ready ? "ready" : (car_power.charging ? "charging" : "off"));
+        // Charging is read from the 0x038 power state, not 0x30E: bytes 0, 1, 5
+        // and 6 of 0x30E all stay zero during a real charge, so that frame does
+        // not carry charging power on this platform.
+        cJSON_AddBoolToObject(root, "charging", car_power.charging);
         cJSON_AddNumberToObject(root, "car_power_raw", car_power.raw);
         cJSON_AddNumberToObject(
             root,
@@ -1048,7 +1053,6 @@ char *config_server_get_status_json(bool remove_sensitive_info)
 	if (precondition_get_charge_power(&charge)) {
         cJSON_AddBoolToObject(root, "charge_power_valid", true);
         cJSON_AddNumberToObject(root, "charge_power_kw", charge.power_kw);
-        cJSON_AddBoolToObject(root, "charging", charge.power_kw > 0U);
         cJSON_AddNumberToObject(
             root,
             "charge_power_age_ms",

@@ -2625,7 +2625,10 @@ function loadAutoTable(jsonData) {
 			}
 			if (obj.car_power_valid) {
 				const raw = ("0" + Number(obj.car_power_raw).toString(16).toUpperCase()).slice(-2);
-				const label = obj.car_ready ? "Ready" : "Off";
+				// Use car_power_state, not the car_ready boolean: there is a third
+				// state ("charging") that car_ready reports as false.
+				const states = { ready: "Ready", charging: "Charging", off: "Off" };
+				const label = states[obj.car_power_state] || obj.car_power_state || "Unknown";
 				document.getElementById("car_power_status").textContent = `${label} (0x${raw}; ${formatAge(obj.car_power_age_ms)} ago)`;
 			} else {
 				document.getElementById("car_power_status").textContent = "Waiting for CAN data";

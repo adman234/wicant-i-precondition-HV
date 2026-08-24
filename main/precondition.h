@@ -51,22 +51,4 @@ typedef struct {
 
 bool precondition_get_car_power(precondition_power_t *out);
 
-// Charging power in kW, byte 6 of frame 0x30E. Reads 0 whenever the car is not
-// charging: it is zero across every frame of all 14 recorded driving and parked
-// logs in tylerharvey/Ioniq5_CAN, while the neighbouring byte churns.
-typedef struct {
-    uint8_t power_kw;
-    // Whole frame, for diagnosis. Bytes 0, 1, 5 and 6 are all identically zero
-    // across every recorded non-charging log, so the archive cannot say which
-    // one carries charging power. Exposing the payload lets a single look
-    // during a real charge settle it.
-    uint8_t data[8];
-    uint8_t dlc;
-    // updated on every 0x30E frame so callers can tell live data from a value
-    // left behind by a bus that went quiet
-    int64_t updated_at_us;
-} precondition_charge_t;
-
-bool precondition_get_charge_power(precondition_charge_t *out);
-
 #endif

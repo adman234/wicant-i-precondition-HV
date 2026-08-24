@@ -1048,30 +1048,6 @@ char *config_server_get_status_json(bool remove_sensitive_info)
         cJSON_AddStringToObject(root, "car_power_state", "unknown");
 	}
 
-	precondition_charge_t charge;
-
-	if (precondition_get_charge_power(&charge)) {
-        cJSON_AddBoolToObject(root, "charge_power_valid", true);
-        cJSON_AddNumberToObject(root, "charge_power_kw", charge.power_kw);
-        cJSON_AddNumberToObject(
-            root,
-            "charge_power_age_ms",
-            (esp_timer_get_time() - charge.updated_at_us) / 1000
-        );
-        {
-            // Full payload as hex, so the byte carrying charging power can be
-            // identified from one observation during a real charge.
-            char charge_hex[17];
-            for (uint8_t i = 0; i < 8U; i++)
-            {
-                snprintf(&charge_hex[i * 2], 3, "%02X", charge.data[i]);
-            }
-            charge_hex[16] = 0;
-            cJSON_AddStringToObject(root, "charge_frame_raw", charge_hex);
-        }
-	} else {
-        cJSON_AddBoolToObject(root, "charge_power_valid", false);
-	}
 
 	{
 		char volt[12] = {0};

@@ -2633,14 +2633,11 @@ function loadAutoTable(jsonData) {
 			} else {
 				document.getElementById("car_power_status").textContent = "Waiting for CAN data";
 			}
-			if (obj.charge_power_valid) {
-				// No kW: 0x30E carries no charging power on this platform, so
-				// charge_power_kw is always 0 and showing it read as "charging at
-				// 0 kW". The raw payload stays visible in case a byte in that
-				// frame turns out to track charge rate after all.
-				const state = obj.charging ? "Yes" : "No";
+			// Charging comes from the 0x038 power state, so it shares that
+			// frame's validity and age.
+			if (obj.car_power_valid) {
 				document.getElementById("charge_power_status").textContent =
-					`${state} (0x${obj.charge_frame_raw || "?"}; ${formatAge(obj.charge_power_age_ms)} ago)`;
+					`${obj.charging ? "Yes" : "No"} (${formatAge(obj.car_power_age_ms)} ago)`;
 			} else {
 				document.getElementById("charge_power_status").textContent = "Waiting for CAN data";
 			}

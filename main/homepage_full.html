@@ -2634,12 +2634,11 @@ function loadAutoTable(jsonData) {
 				document.getElementById("car_power_status").textContent = "Waiting for CAN data";
 			}
 			if (obj.charge_power_valid) {
-				const state = obj.charging
-					? `Yes, ${obj.charge_power_kw} kW`
-					: "No";
-				// Raw payload shown so the byte carrying charging power can be
-				// identified during a real charge; bytes 0, 1, 5 and 6 are all
-				// zero in every recorded non-charging log.
+				// No kW: 0x30E carries no charging power on this platform, so
+				// charge_power_kw is always 0 and showing it read as "charging at
+				// 0 kW". The raw payload stays visible in case a byte in that
+				// frame turns out to track charge rate after all.
+				const state = obj.charging ? "Yes" : "No";
 				document.getElementById("charge_power_status").textContent =
 					`${state} (0x${obj.charge_frame_raw || "?"}; ${formatAge(obj.charge_power_age_ms)} ago)`;
 			} else {

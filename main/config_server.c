@@ -440,6 +440,52 @@ static esp_err_t index_handler(httpd_req_t *req)
 }
 
 
+// Current value of a secret, for restoring one that came back empty.
+static const char *config_secret_current(const char *key)
+{
+	if (strcmp(key, "sta_pass") == 0)        return device_config.sta_pass;
+	if (strcmp(key, "ap_pass") == 0)         return device_config.ap_pass;
+	if (strcmp(key, "ble_pass") == 0)        return device_config.ble_pass;
+	if (strcmp(key, "mqtt_pass") == 0)       return device_config.mqtt_pass;
+	if (strcmp(key, "batt_alert_pass") == 0) return device_config.batt_alert_pass;
+	if (strcmp(key, "batt_mqtt_pass") == 0)  return device_config.batt_mqtt_pass;
+	return NULL;
+}
+
+// Put back any secret the browser sent empty, so a config save that never
+// received the real value cannot wipe it. Returns a newly allocated string to
+// store, or NULL to store the body unchanged.
+static char *config_restore_secrets(const char *body, size_t len)
+{
+	cJSON *incoming = cJSON_ParseWithLength(body, len);
+	if (incoming == NULL)
+	{
+		return NULL;
+	}
+
+	bool changed = false;
+	for (size_t i = 0; i < CONFIG_SECRET_KEY_COUNT; i++)
+	{
+		const char *key = CONFIG_SECRET_KEYS[i];
+		cJSON *item = cJSON_GetObjectItem(incoming, key);
+		if (!cJSON_IsString(item) || (item->valuestring != NULL && item->valuestring[0] != 0))
+		{
+			continue;
+		}
+
+		const char *current = config_secret_current(key);
+		if (current != NULL && current[0] != 0)
+		{
+			cJSON_ReplaceItemInObject(incoming, key, cJSON_CreateString(current));
+			changed = true;
+		}
+	}
+
+	char *out = changed ? cJSON_PrintUnformatted(incoming) : NULL;
+	cJSON_Delete(incoming);
+	return out;
+}
+
 static esp_err_t store_config_handler(httpd_req_t *req)
 {
     char *buf = NULL;
@@ -471,16 +517,22 @@ static esp_err_t store_config_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
+    char *restored = config_restore_secrets(buf, buf_size);
+    const char *to_write = restored ? restored : buf;
+    size_t to_write_len = restored ? strlen(restored) : buf_size;
+
     FILE *f = fopen(FS_MOUNT_POINT"/config.json", "w");
     if (f)
     {
         // Write the received data into the file
-        fwrite(buf, 1, buf_size, f);
+        fwrite(to_write, 1, to_write_len, f);
         fclose(f);
+        free(restored);
     }
     else
     {
         // Handle file open error
+        free(restored);
         free(buf);
         return ESP_FAIL;
     }
@@ -693,12 +745,56 @@ static esp_err_t load_pid_auto_config_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+// Secrets are never sent to the browser. /load_config blanks them and
+// /store_config restores the stored value for any secret that comes back empty,
+// so an unchanged password stays on the device instead of making a round trip
+// through the network, the page and the browser cache on every config load.
+//
+// Consequence: a deliberately emptied secret is treated as "unchanged". Clearing
+// one means setting it to a new value, not blanking the field.
+static const char *const CONFIG_SECRET_KEYS[] = {
+	"sta_pass",
+	"ap_pass",
+	"ble_pass",
+	"mqtt_pass",
+	"batt_alert_pass",
+	"batt_mqtt_pass",
+};
+
+#define CONFIG_SECRET_KEY_COUNT 	(sizeof(CONFIG_SECRET_KEYS) / sizeof(CONFIG_SECRET_KEYS[0]))
+
 static esp_err_t load_config_handler(httpd_req_t *req)
 {
-    const char* resp_str = (const char*)device_config_file;
 	httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, (const char*)resp_str, HTTPD_RESP_USE_STRLEN);
-    ESP_LOGI(TAG, "device_config_file: %s", device_config_file);
+
+	cJSON *cfg = device_config_file ? cJSON_Parse(device_config_file) : NULL;
+	if (cfg == NULL)
+	{
+		// Nothing stored yet, or unparseable: send it through untouched rather
+		// than failing the page load.
+		httpd_resp_send(req, (const char *)device_config_file, HTTPD_RESP_USE_STRLEN);
+		return ESP_OK;
+	}
+
+	for (size_t i = 0; i < CONFIG_SECRET_KEY_COUNT; i++)
+	{
+		if (cJSON_GetObjectItem(cfg, CONFIG_SECRET_KEYS[i]) != NULL)
+		{
+			cJSON_ReplaceItemInObject(cfg, CONFIG_SECRET_KEYS[i], cJSON_CreateString(""));
+		}
+	}
+
+	char *redacted = cJSON_PrintUnformatted(cfg);
+	cJSON_Delete(cfg);
+
+	if (redacted == NULL)
+	{
+		httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "serialize error");
+		return ESP_FAIL;
+	}
+
+	httpd_resp_send(req, redacted, HTTPD_RESP_USE_STRLEN);
+	free(redacted);
 	UBaseType_t stack_high_watermark = uxTaskGetStackHighWaterMark(NULL);
 	ESP_LOGI(TAG, "Task stack high watermark: %u words", stack_high_watermark);
     return ESP_OK;

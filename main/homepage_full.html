@@ -618,6 +618,27 @@
                         </td>
                     </tr>
                     <tr>
+                        <td>Web Login User:</td>
+                        <td>
+                            <input type="text" id="http_user" name="http_user" value="wican" />
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>Web Login Password:</td>
+                        <td>
+                            <input type="text" id="http_pass" name="http_pass" placeholder="unchanged" />
+                        </td>
+                    </tr>
+                    <tr>
+                        <td colspan="2" style="color:#555;font-size:.7rem">
+                            Requires a login for the config pages, firmware upload and reboot.
+                            Leave the password empty to keep the current one; set it to a single
+                            space to turn the login off. Status and webhook endpoints stay open so
+                            Home Assistant keeps working. Note this is HTTP Basic over plain HTTP:
+                            it stops casual access on a shared network, not packet capture.
+                        </td>
+                    </tr>
+                    <tr>
                         <td>Auto-Disable AP:</td>
                         <td>
                             <select name="ap_auto_disable" id="ap_auto_disable" onchange="submit_enable();">
@@ -2925,6 +2946,10 @@ function loadAutoTable(jsonData) {
 		obj["port_type"] = document.getElementById("port_type").value;
 		obj["port"] = document.getElementById("tcp_port_value").value;
 		obj["ap_pass"] = document.getElementById("ap_pass_value").value;
+		obj["http_user"] = document.getElementById("http_user").value;
+		// Empty means "keep the stored password"; whitespace-only is the escape
+		// hatch the firmware reads as "turn the login off".
+		obj["http_pass"] = document.getElementById("http_pass").value;
 		obj["protocol"] = document.getElementById("protocol").value;
 		obj["ble_pass"] = document.getElementById("ble_pass_value").value;
 		obj["ble_status"] = document.getElementById("ble_status").value;
@@ -3264,6 +3289,9 @@ function loadAutoTable(jsonData) {
 			document.getElementById("protocol").value = obj.protocol;
 			document.getElementById("tcp_port_value").value = obj.port;
 			document.getElementById("ap_pass_value").value = obj.ap_pass;
+			if (obj.http_user !== undefined) {
+				document.getElementById("http_user").value = obj.http_user;
+			}
 			document.getElementById("ble_pass_value").value = obj.ble_pass;
 			document.getElementById("sleep_volt").value = obj.sleep_volt;
             document.getElementById("sleep_volt_value").textContent = obj.sleep_volt;

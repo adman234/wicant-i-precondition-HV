@@ -76,6 +76,8 @@
 #include "ha_webhooks.h"
 #include "precondition.h"
 #include "esp_timer.h"
+#include "mbedtls/base64.h"
+#include <ctype.h>
 
 #define WIFI_CONNECTED_BIT			BIT0
 #define WS_CONNECTED_BIT			BIT1
@@ -134,6 +136,8 @@ const char device_config_default[] = R"json({
 "sleep_status":"disable",
 "sleep_can_protect":"disable",
 "sleep_charge_protect":"disable",
+"http_user":"wican",
+"http_pass":"",
 "sleep_volt":"13.1",
 "wakeup_volt":"13.5",
 "batt_alert":"disable",
@@ -440,6 +444,87 @@ static esp_err_t index_handler(httpd_req_t *req)
 }
 
 
+// Secrets are never sent to the browser. /load_config blanks them and
+// /store_config restores the stored value for any secret that comes back empty,
+// so an unchanged password stays on the device instead of making a round trip
+// through the network, the page and the browser cache on every config load.
+//
+// Consequence: a deliberately emptied secret is treated as "unchanged". Clearing
+// one means setting it to a new value, not blanking the field.
+static const char *const CONFIG_SECRET_KEYS[] = {
+	"sta_pass",
+	"ap_pass",
+	"ble_pass",
+	"mqtt_pass",
+	"batt_alert_pass",
+	"batt_mqtt_pass",
+	"http_pass",
+};
+
+#define CONFIG_SECRET_KEY_COUNT 	(sizeof(CONFIG_SECRET_KEYS) / sizeof(CONFIG_SECRET_KEYS[0]))
+
+bool config_server_http_auth_enabled(void)
+{
+	return device_config.http_pass[0] != 0;
+}
+
+// HTTP Basic on the endpoints that expose or change configuration, or that can
+// replace the running firmware. Disabled while no password is set, so an
+// existing install keeps working until the owner opts in.
+//
+// Deliberately NOT applied to /check_status, /api/webhook, /autopid_data or the
+// homepage: those are what Home Assistant talks to, and none of them carries a
+// secret any more. Basic auth over plain HTTP is base64, not encryption; this
+// stops casual access on a shared network, not someone capturing traffic.
+static bool http_auth_ok(httpd_req_t *req)
+{
+	if (!config_server_http_auth_enabled())
+	{
+		return true;
+	}
+
+	char expected_plain[sizeof(device_config.http_user) + sizeof(device_config.http_pass) + 2];
+	snprintf(expected_plain, sizeof(expected_plain), "%s:%s",
+			device_config.http_user, device_config.http_pass);
+
+	unsigned char expected_b64[((sizeof(expected_plain) + 2) / 3) * 4 + 4] = {0};
+	size_t b64_len = 0;
+	if (mbedtls_base64_encode(expected_b64, sizeof(expected_b64), &b64_len,
+			(const unsigned char *)expected_plain, strlen(expected_plain)) != 0)
+	{
+		return false;
+	}
+
+	size_t hdr_len = httpd_req_get_hdr_value_len(req, "Authorization");
+	if (hdr_len == 0 || hdr_len > 256)
+	{
+		return false;
+	}
+
+	char hdr[257] = {0};
+	if (httpd_req_get_hdr_value_str(req, "Authorization", hdr, sizeof(hdr)) != ESP_OK)
+	{
+		return false;
+	}
+
+	if (strncmp(hdr, "Basic ", 6) != 0)
+	{
+		return false;
+	}
+
+	return strcmp(hdr + 6, (const char *)expected_b64) == 0;
+}
+
+static esp_err_t http_auth_reject(httpd_req_t *req)
+{
+	httpd_resp_set_status(req, "401 Unauthorized");
+	httpd_resp_set_hdr(req, "WWW-Authenticate", "Basic realm=\"WiCAN\"");
+	httpd_resp_send(req, "authentication required", HTTPD_RESP_USE_STRLEN);
+	return ESP_OK;
+}
+
+#define REQUIRE_HTTP_AUTH(req) do { if (!http_auth_ok(req)) { return http_auth_reject(req); } } while (0)
+
 // Current value of a secret, for restoring one that came back empty.
 static const char *config_secret_current(const char *key)
 {
@@ -449,6 +534,7 @@ static const char *config_secret_current(const char *key)
 	if (strcmp(key, "mqtt_pass") == 0)       return device_config.mqtt_pass;
 	if (strcmp(key, "batt_alert_pass") == 0) return device_config.batt_alert_pass;
 	if (strcmp(key, "batt_mqtt_pass") == 0)  return device_config.batt_mqtt_pass;
+	if (strcmp(key, "http_pass") == 0)       return device_config.http_pass;
 	return NULL;
 }
 
@@ -488,6 +574,7 @@ static char *config_restore_secrets(const char *body, size_t len)
 
 static esp_err_t store_config_handler(httpd_req_t *req)
 {
+	REQUIRE_HTTP_AUTH(req);
     char *buf = NULL;
     size_t buf_size = req->content_len;
 
@@ -549,6 +636,7 @@ static esp_err_t store_config_handler(httpd_req_t *req)
 
 static esp_err_t store_canflt_handler(httpd_req_t *req)
 {
+	REQUIRE_HTTP_AUTH(req);
     char *buf = NULL;
     size_t buf_size = req->content_len;
 
@@ -619,6 +707,7 @@ static esp_err_t store_canflt_handler(httpd_req_t *req)
 
 static esp_err_t load_canflt_handler(httpd_req_t *req)
 {
+	REQUIRE_HTTP_AUTH(req);
 	if(mqtt_canflt_file != NULL)
 	{
 		const char* resp_str = (const char*)mqtt_canflt_file;
@@ -638,6 +727,7 @@ static esp_err_t load_canflt_handler(httpd_req_t *req)
 
 static esp_err_t load_pid_auto_handler(httpd_req_t *req)
 {
+	REQUIRE_HTTP_AUTH(req);
     FILE *f = fopen(FS_MOUNT_POINT"/auto_pid.json", "r");
     if (f == NULL) 
 	{
@@ -682,6 +772,7 @@ static esp_err_t load_pid_auto_handler(httpd_req_t *req)
 
 static esp_err_t load_pid_auto_config_handler(httpd_req_t *req)
 {
+	REQUIRE_HTTP_AUTH(req);
     const char *filepath = FS_MOUNT_POINT"/car_data.json";
     ESP_LOGI(TAG, "Opening file: %s", filepath);
     FILE *fd = fopen(filepath, "r");
@@ -745,26 +836,9 @@ static esp_err_t load_pid_auto_config_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-// Secrets are never sent to the browser. /load_config blanks them and
-// /store_config restores the stored value for any secret that comes back empty,
-// so an unchanged password stays on the device instead of making a round trip
-// through the network, the page and the browser cache on every config load.
-//
-// Consequence: a deliberately emptied secret is treated as "unchanged". Clearing
-// one means setting it to a new value, not blanking the field.
-static const char *const CONFIG_SECRET_KEYS[] = {
-	"sta_pass",
-	"ap_pass",
-	"ble_pass",
-	"mqtt_pass",
-	"batt_alert_pass",
-	"batt_mqtt_pass",
-};
-
-#define CONFIG_SECRET_KEY_COUNT 	(sizeof(CONFIG_SECRET_KEYS) / sizeof(CONFIG_SECRET_KEYS[0]))
-
 static esp_err_t load_config_handler(httpd_req_t *req)
 {
+	REQUIRE_HTTP_AUTH(req);
 	httpd_resp_set_type(req, "application/json");
 
 	cJSON *cfg = device_config_file ? cJSON_Parse(device_config_file) : NULL;
@@ -802,6 +876,7 @@ static esp_err_t load_config_handler(httpd_req_t *req)
 
 static esp_err_t load_car_config_handler(httpd_req_t *req)
 {
+	REQUIRE_HTTP_AUTH(req);
     char *response_str = autopid_get_config();
     
     if (response_str) {
@@ -820,6 +895,7 @@ static esp_err_t load_car_config_handler(httpd_req_t *req)
 
 static esp_err_t system_reboot_handler(httpd_req_t *req)
 {
+	REQUIRE_HTTP_AUTH(req);
 	const char *resp_str = "Configuration saved! Rebooting...";
     httpd_resp_send(req, resp_str, HTTPD_RESP_USE_STRLEN);
 
@@ -839,6 +915,7 @@ static esp_err_t logo_handler(httpd_req_t *req)
 
 static esp_err_t store_auto_data_handler(httpd_req_t *req)
 {
+	REQUIRE_HTTP_AUTH(req);
     if (!req)
 	{
         return ESP_ERR_INVALID_ARG;
@@ -938,6 +1015,7 @@ cleanup:
 
 static esp_err_t store_car_data_handler(httpd_req_t *req)
 {
+	REQUIRE_HTTP_AUTH(req);
     int total_len = req->content_len;
     int received = 0;
 	const char *filepath = FS_MOUNT_POINT"/car_data.json";
@@ -1072,6 +1150,7 @@ char *config_server_get_status_json(bool remove_sensitive_info)
 	cJSON_AddStringToObject(root, "sleep_status", device_config.sleep_status);
 	cJSON_AddStringToObject(root, "sleep_can_protect", device_config.sleep_can_protect);
 	cJSON_AddStringToObject(root, "sleep_charge_protect", device_config.sleep_charge_protect);
+	cJSON_AddBoolToObject(root, "http_auth", device_config.http_pass[0] != 0);
 	cJSON_AddStringToObject(root, "sleep_volt", device_config.sleep_volt);
 	cJSON_AddStringToObject(root, "sleep_time", device_config.sleep_time);
 	cJSON_AddStringToObject(root, "wakeup_volt", device_config.wakeup_volt);
@@ -1317,6 +1396,7 @@ static esp_err_t ws_handler(httpd_req_t *req)
 /* Handler to upload a file onto the server */
 static esp_err_t upload_post_handler(httpd_req_t *req)
 {
+	REQUIRE_HTTP_AUTH(req);
     char filepath[FILE_PATH_MAX];
     uint32_t total_size = 0;
 
@@ -1513,6 +1593,7 @@ static esp_err_t upload_post_handler(httpd_req_t *req)
 
 static esp_err_t upload_car_data_handler(httpd_req_t *req)
 {
+	REQUIRE_HTTP_AUTH(req);
     char filepath[FILE_PATH_MAX];
     uint32_t total_size = 0;
 
@@ -1668,6 +1749,7 @@ esp_err_t autopid_data_handler(httpd_req_t *req)
 
 static esp_err_t scan_available_pids_handler(httpd_req_t *req)
 {
+	REQUIRE_HTTP_AUTH(req);
     char protocol[8];
     char param[32];
     uint8_t protocol_num = 6; // Default protocol
@@ -1991,6 +2073,37 @@ static void config_server_load_cfg(char *cfg)
 		}
 	}
 	ESP_LOGI(TAG, "device_config.sleep_charge_protect: %s", device_config.sleep_charge_protect);
+
+	strlcpy(device_config.http_user, "wican", sizeof(device_config.http_user));
+	key = cJSON_GetObjectItem(root, "http_user");
+	if (cJSON_IsString(key) && key->valuestring != NULL && key->valuestring[0] != 0)
+	{
+		strlcpy(device_config.http_user, key->valuestring, sizeof(device_config.http_user));
+	}
+
+	device_config.http_pass[0] = 0;
+	key = cJSON_GetObjectItem(root, "http_pass");
+	if (cJSON_IsString(key) && key->valuestring != NULL)
+	{
+		strlcpy(device_config.http_pass, key->valuestring, sizeof(device_config.http_pass));
+
+		// An empty field means "keep", so whitespace-only is how the UI asks for
+		// the login to be turned off.
+		bool blank = true;
+		for (const char *ch = device_config.http_pass; *ch != 0; ch++)
+		{
+			if (!isspace((unsigned char)*ch))
+			{
+				blank = false;
+				break;
+			}
+		}
+		if (blank)
+		{
+			device_config.http_pass[0] = 0;
+		}
+	}
+	ESP_LOGI(TAG, "http auth: %s", device_config.http_pass[0] ? "enabled" : "disabled");
 
 	key = cJSON_GetObjectItem(root,"ble_status");
 	if(key == 0)

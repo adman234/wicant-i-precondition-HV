@@ -62,8 +62,8 @@ bool car_in_ready(void);
 typedef struct {
     // byte 0 of the power-status frame; its low nibble is the power state
     uint8_t raw;
-    // the low nibble reads 0x06, which holds steady while the car charges
-    bool charging;
+    // the low nibble reads 0x06: awake with the charge cable connected
+    bool plugged_in;
     int64_t updated_at_us;
 } precondition_power_t;
 

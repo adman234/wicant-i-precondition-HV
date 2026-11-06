@@ -684,7 +684,7 @@ static void run_ioniq6_battery_frames(void) {
 }
 
 // The power-status byte is published on every car-side frame from either
-// identifier, with charging decoded from the low nibble.
+// identifier, with the plug state decoded from the low nibble.
 static void run_car_power_state(void) {
     precondition_init();
     precondition_power_t power;
@@ -698,22 +698,28 @@ static void run_car_power_state(void) {
     fake_now = 123456;
     rx_frame(0x038, d, CAN_BUS_0);
     CHECK(precondition_get_car_power(&power));
-    CHECK(power.raw == 0x06 && power.charging);
+    CHECK(power.raw == 0x06 && power.plugged_in);
     CHECK(power.updated_at_us == fake_now);
     CHECK(!car_in_ready());
 
-    // READY is not charging, and a repeated frame still refreshes the age
+    // ON but not READY, unplugged
+    d[0] = 0x02;
+    rx_frame(0x038, d, CAN_BUS_0);
+    CHECK(precondition_get_car_power(&power));
+    CHECK(power.raw == 0x02 && !power.plugged_in);
+
+    // READY reads 0x04, and a repeated frame still refreshes the age
     car_power(true);
     fake_now += 1000;
     car_power(true);
     CHECK(precondition_get_car_power(&power));
-    CHECK(power.raw == 0x04 && !power.charging);
+    CHECK(power.raw == 0x04 && !power.plugged_in);
     CHECK(power.updated_at_us == fake_now);
 
     // the Ioniq 6 identifier decodes the same way
     ioniq6_power(0x06, CAN_BUS_0);
     CHECK(precondition_get_car_power(&power));
-    CHECK(power.raw == 0x06 && power.charging);
+    CHECK(power.raw == 0x06 && power.plugged_in);
 }
 
 // The Ioniq 6 form of the precondition status frame, 0x0A82AA03. It must drive

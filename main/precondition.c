@@ -173,9 +173,9 @@ static bool is_utility_request(const twai_message_t *frame) {
 #define POWER_STATUS_MASK 0x0FU
 #define POWER_STATUS_READY(power_status_byte) \
     (((power_status_byte) & POWER_STATUS_MASK) == 0x04U)
-// steady for the length of a charge on an EV6; outside a charge it shows up only
-// as a brief transient between other states
-#define POWER_STATUS_CHARGING(power_status_byte) \
+// plugged in: read while charging and while ON but not READY with the charge
+// cable connected, where the same state unplugged reads 0x02 (EV6, Ioniq 6)
+#define POWER_STATUS_PLUGGED_IN(power_status_byte) \
     (((power_status_byte) & POWER_STATUS_MASK) == 0x06U)
 
 #define PRECONDITION_DEBOUNCE_US 1000000U  // 1 second
@@ -1358,7 +1358,7 @@ static void precondition_global_rx(sm_t *sm, const twai_message_t *to_push, can_
             && to_push->data_length_code >= 1U) {
         precondition_power_t power = {
             .raw = to_push->data[0],
-            .charging = POWER_STATUS_CHARGING(to_push->data[0]),
+            .plugged_in = POWER_STATUS_PLUGGED_IN(to_push->data[0]),
             .updated_at_us = sm_now(sm),
         };
         xQueueOverwrite(car_power_queue, &power);

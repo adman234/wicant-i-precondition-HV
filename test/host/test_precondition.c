@@ -722,6 +722,43 @@ static void run_car_power_state(void) {
     CHECK(power.raw == 0x06 && power.plugged_in);
 }
 
+// DEBUG: the power history keeps one entry per byte 0/1 pair change, and the
+// latest frame carries all 8 bytes.
+static void run_car_power_history(void) {
+    precondition_init();
+    precondition_power_change_t h[POWER_HISTORY_LEN];
+    precondition_power_t power;
+    CHECK(precondition_get_power_history(h, POWER_HISTORY_LEN) == 0);
+
+    uint8_t wake[8] = {0x06, 0xAB, 0x00, 0x00, 0x20, 0x39, 0x01, 0x00};
+    uint8_t on[8] = {0x02, 0x01, 0x00, 0x70, 0x91, 0x3B, 0x01, 0x00};
+    fake_now = 1000;
+    rx_frame(0x038, wake, CAN_BUS_0);
+    fake_now = 2000;
+    wake[3] = 0x6C; // other bytes changing doesn't start a new entry
+    rx_frame(0x038, wake, CAN_BUS_0);
+    CHECK(precondition_get_car_power(&power));
+    CHECK(power.len == 8 && power.data[1] == 0xAB && power.data[3] == 0x6C);
+    fake_now = 3000;
+    rx_frame(0x038, on, CAN_BUS_0);
+    rx_frame(0x038, wake, CAN_BUS_1); // body bus ignored
+
+    CHECK(precondition_get_power_history(h, POWER_HISTORY_LEN) == 2);
+    CHECK(h[0].data[0] == 0x06 && h[0].data[1] == 0xAB && h[0].frames == 2);
+    CHECK(h[0].first_us == 1000 && h[0].last_us == 2000);
+    CHECK(h[1].data[0] == 0x02 && h[1].data[1] == 0x01 && h[1].frames == 1);
+
+    // the ring keeps the newest entries, oldest first
+    for (int i = 0; i < POWER_HISTORY_LEN + 5; i++) {
+        uint8_t d[8] = {0x01, (uint8_t)i};
+        rx_frame(0x038, d, CAN_BUS_0);
+    }
+    CHECK(precondition_get_power_history(h, POWER_HISTORY_LEN) == POWER_HISTORY_LEN);
+    CHECK(h[0].data[1] == 5 && h[POWER_HISTORY_LEN - 1].data[1] == POWER_HISTORY_LEN + 4);
+    CHECK(precondition_get_power_history(h, 3) == 3);
+    CHECK(h[2].data[1] == POWER_HISTORY_LEN + 4);
+}
+
 // The Ioniq 6 form of the precondition status frame, 0x0A82AA03. It must drive
 // the state machine exactly like 0x2AD, and it is the only thing that identifies
 // an Ioniq 6 for the web UI's "auto" vehicle setting: a recognised status byte on
@@ -2000,6 +2037,7 @@ static const suite_t suites[] = {
     {"precondition Ioniq 6 start timeout", ONCE, PRESS_SHORT, run_ioniq6_start_timeout},
     {"precondition Ioniq 6 power status", PERSISTENT, PRESS_SHORT, run_ioniq6_power_status},
     {"precondition car power state", ONCE, PRESS_SHORT, run_car_power_state},
+    {"precondition car power history", ONCE, PRESS_SHORT, run_car_power_history},
     {"precondition automatic temperature cutoff", CONTINUOUS, PRESS_SHORT, run_automatic_temperature_cutoff},
     {"precondition persistent temperature cutoff", PERSISTENT, PRESS_SHORT, run_automatic_temperature_cutoff},
     {"precondition continuous cool wait", CONTINUOUS, PRESS_SHORT, run_managed_cool_wait},

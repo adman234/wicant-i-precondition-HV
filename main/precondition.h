@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stddef.h>
 #include "hsm.h"
 
 void precondition_init(void);
@@ -65,8 +66,25 @@ typedef struct {
     // the low nibble reads 0x06: awake with the charge cable connected
     bool plugged_in;
     int64_t updated_at_us;
+    // DEBUG: the whole frame, to tell apart states that share byte 0
+    uint8_t data[8];
+    uint8_t len;
 } precondition_power_t;
 
 bool precondition_get_car_power(precondition_power_t *out);
+
+// DEBUG: every change of power-status bytes 0 and 1 since boot (oldest first,
+// the last POWER_HISTORY_LEN kept). Repeats of the same pair extend the entry.
+#define POWER_HISTORY_LEN 40
+typedef struct {
+    uint8_t data[8];      // frame at the first sighting of this byte 0/1 pair
+    uint8_t len;
+    int64_t first_us;
+    int64_t last_us;
+    uint32_t frames;
+} precondition_power_change_t;
+
+// copies up to max entries into out, oldest first; returns the count
+size_t precondition_get_power_history(precondition_power_change_t *out, size_t max);
 
 #endif

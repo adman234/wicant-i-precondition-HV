@@ -1120,8 +1120,39 @@ char *config_server_get_status_json(bool remove_sensitive_info)
             "car_power_age_ms",
             (esp_timer_get_time() - car_power.updated_at_us) / 1000
         );
+        // DEBUG: bytes 0 and 1 plus the full frame, to map the power states
+        cJSON_AddNumberToObject(root, "car_power_byte0", car_power.data[0]);
+        cJSON_AddNumberToObject(root, "car_power_byte1", car_power.len >= 2U ? car_power.data[1] : 0);
+        char frame_hex[3 * 8 + 1] = {0};
+        for (uint8_t i = 0; i < car_power.len; i++) {
+            snprintf(frame_hex + 3 * i, 4, i ? " %02X" : "%02X", car_power.data[i]);
+        }
+        cJSON_AddStringToObject(root, "car_power_frame", frame_hex);
 	} else {
         cJSON_AddBoolToObject(root, "car_power_valid", false);
+	}
+
+	// DEBUG: every byte 0/1 change since boot, oldest first
+	{
+		static precondition_power_change_t hist[POWER_HISTORY_LEN];
+		size_t n = precondition_get_power_history(hist, POWER_HISTORY_LEN);
+		int64_t now_us = esp_timer_get_time();
+		cJSON *arr = cJSON_AddArrayToObject(root, "car_power_history");
+		for (size_t i = 0; arr != NULL && i < n; i++) {
+			cJSON *e = cJSON_CreateObject();
+			if (e == NULL) {
+				break;
+			}
+			char frame_hex[3 * 8 + 1] = {0};
+			for (uint8_t j = 0; j < hist[i].len; j++) {
+				snprintf(frame_hex + 3 * j, 4, j ? " %02X" : "%02X", hist[i].data[j]);
+			}
+			cJSON_AddStringToObject(e, "frame", frame_hex);
+			cJSON_AddNumberToObject(e, "first_ago_ms", (now_us - hist[i].first_us) / 1000);
+			cJSON_AddNumberToObject(e, "duration_ms", (hist[i].last_us - hist[i].first_us) / 1000);
+			cJSON_AddNumberToObject(e, "frames", hist[i].frames);
+			cJSON_AddItemToArray(arr, e);
+		}
 	}
 
 	char uptime_str[32];

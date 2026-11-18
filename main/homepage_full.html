@@ -571,6 +571,14 @@
                     <td><div id="plugged_in_status">Waiting for CAN data</div></td>
                 </tr>
                 <tr>
+                    <td>Power Bytes (debug):</td>
+                    <td><div id="power_bytes_status">Waiting for CAN data</div></td>
+                </tr>
+                <tr>
+                    <td>Power Byte History (debug):</td>
+                    <td><pre id="power_history_status" style="margin: 0; font-size: 0.8rem; white-space: pre; overflow-x: auto; user-select: text;">Waiting for CAN data</pre></td>
+                </tr>
+                <tr>
                     <td>HV Battery State of Charge:</td>
                     <td><div id="battery_soc_status">Waiting for CAN data</div></td>
                 </tr>
@@ -2711,8 +2719,22 @@ function loadAutoTable(jsonData) {
 				// the raw byte is shown so unrecognised power states can be reported
 				const raw = Number(obj.car_power_raw).toString(16).toUpperCase().padStart(2, "0");
 				document.getElementById("plugged_in_status").textContent = `${obj.plugged_in ? "Yes" : "No"} (0x${raw}); (${formatAge(obj.car_power_age_ms)} ago)`;
+				// DEBUG: both bytes split into nibbles, plus the full frame
+				const hex = (v) => Number(v).toString(16).toUpperCase().padStart(2, "0");
+				const nib = (v) => `${(Number(v) >> 4).toString(16).toUpperCase()}|${(Number(v) & 0xF).toString(16).toUpperCase()}`;
+				document.getElementById("power_bytes_status").textContent =
+					`byte0 0x${hex(obj.car_power_byte0)} (hi|lo ${nib(obj.car_power_byte0)}), byte1 0x${hex(obj.car_power_byte1)} (hi|lo ${nib(obj.car_power_byte1)}); frame ${obj.car_power_frame}`;
 			} else {
 				document.getElementById("plugged_in_status").textContent = "Waiting for CAN data";
+				document.getElementById("power_bytes_status").textContent = "Waiting for CAN data";
+			}
+			if (Array.isArray(obj.car_power_history) && obj.car_power_history.length) {
+				const lines = ["b0 b1  started   lasted  frames  first frame"];
+				for (const e of obj.car_power_history) {
+					const b = e.frame.split(" ");
+					lines.push(`${b[0]} ${b[1] || "--"}  ${(formatAge(e.first_ago_ms) + " ago").padEnd(9)} ${formatAge(e.duration_ms).padEnd(7)} ${String(e.frames).padEnd(7)} ${e.frame}`);
+				}
+				document.getElementById("power_history_status").textContent = lines.join(String.fromCharCode(10));
 			}
 			if (obj.battery_soc_valid) {
 				document.getElementById("battery_soc_status").textContent = `${obj.battery_soc_pct}%; (${formatAge(obj.battery_soc_age_ms)} ago)`;

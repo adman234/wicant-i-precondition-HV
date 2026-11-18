@@ -13,6 +13,7 @@
 #include "config_server.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 
 #define TAG __func__
 
@@ -404,6 +405,42 @@ static QueueHandle_t battery_temperature_queue = NULL;
 static QueueHandle_t battery_soc_queue = NULL;
 static QueueHandle_t car_model_queue = NULL;
 static QueueHandle_t car_power_queue = NULL;
+
+// DEBUG: ring of power-status byte 0/1 changes, see precondition.h
+static SemaphoreHandle_t power_history_lock = NULL;
+static precondition_power_change_t power_history[POWER_HISTORY_LEN];
+static size_t power_history_head = 0;   // next slot to write
+static size_t power_history_count = 0;
+
+static void power_history_note(const twai_message_t *msg, int64_t now) {
+    if (power_history_lock == NULL) {
+        return;
+    }
+    uint8_t len = msg->data_length_code > 8U ? 8U : msg->data_length_code;
+    uint8_t b1 = len >= 2U ? msg->data[1] : 0U;
+    xSemaphoreTake(power_history_lock, portMAX_DELAY);
+    precondition_power_change_t *last = power_history_count == 0 ? NULL
+        : &power_history[(power_history_head + POWER_HISTORY_LEN - 1U) % POWER_HISTORY_LEN];
+    if (last != NULL && last->data[0] == msg->data[0]
+            && (last->len >= 2U ? last->data[1] : 0U) == b1) {
+        last->last_us = now;
+        last->frames++;
+    } else {
+        precondition_power_change_t *e = &power_history[power_history_head];
+        memset(e, 0, sizeof(*e));
+        memcpy(e->data, msg->data, len);
+        e->len = len;
+        e->first_us = now;
+        e->last_us = now;
+        e->frames = 1;
+        power_history_head = (power_history_head + 1U) % POWER_HISTORY_LEN;
+        if (power_history_count < POWER_HISTORY_LEN) {
+            power_history_count++;
+        }
+        ESP_LOGI(TAG, "power frame: byte0=%02X byte1=%02X", msg->data[0], b1);
+    }
+    xSemaphoreGive(power_history_lock);
+}
 static QueueHandle_t precondition_state_queue = NULL;
 static QueueHandle_t precondition_toggle_queue = NULL;
 
@@ -1360,8 +1397,11 @@ static void precondition_global_rx(sm_t *sm, const twai_message_t *to_push, can_
             .raw = to_push->data[0],
             .plugged_in = POWER_STATUS_PLUGGED_IN(to_push->data[0]),
             .updated_at_us = sm_now(sm),
+            .len = to_push->data_length_code > 8U ? 8U : to_push->data_length_code,
         };
+        memcpy(power.data, to_push->data, power.len);
         xQueueOverwrite(car_power_queue, &power);
+        power_history_note(to_push, power.updated_at_us);
 
         ready_status_t ready = POWER_STATUS_READY(to_push->data[0])
                                ? READY_STATUS_READY : READY_STATUS_NOT_READY;
@@ -1579,6 +1619,12 @@ void precondition_init(void) {
     configASSERT(car_model_queue != NULL);
     car_power_queue = xQueueCreate(1, sizeof(precondition_power_t));
     configASSERT(car_power_queue != NULL);
+    if (power_history_lock == NULL) {
+        power_history_lock = xSemaphoreCreateMutex();
+        configASSERT(power_history_lock != NULL);
+    }
+    power_history_head = 0;
+    power_history_count = 0;
     precondition_state_queue = xQueueCreate(1, sizeof(precondition_state_t));
     configASSERT(precondition_state_queue != NULL);
     precondition_toggle_queue = xQueueCreate(1, sizeof(uint8_t));
@@ -1628,6 +1674,21 @@ bool precondition_get_car_power(precondition_power_t *out) {
     }
 
     return xQueuePeek(car_power_queue, out, 0) == pdTRUE;
+}
+
+size_t precondition_get_power_history(precondition_power_change_t *out, size_t max) {
+    if (out == NULL || max == 0U || power_history_lock == NULL) {
+        return 0;
+    }
+    xSemaphoreTake(power_history_lock, portMAX_DELAY);
+    size_t n = power_history_count < max ? power_history_count : max;
+    // the newest n entries, oldest first
+    size_t start = (power_history_head + POWER_HISTORY_LEN - n) % POWER_HISTORY_LEN;
+    for (size_t i = 0; i < n; i++) {
+        out[i] = power_history[(start + i) % POWER_HISTORY_LEN];
+    }
+    xSemaphoreGive(power_history_lock);
+    return n;
 }
 
 bool precondition_get_car_model(egmp_car_model_t *out) {
